@@ -1,34 +1,40 @@
-#![allow(clippy::inline_always)]
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::return_self_not_must_use)]
 
+use crate::window::{HannWindow, HammingWindow, BlackmanHarris, RectangularWindow, WindowFunction};
 use num_complex::Complex;
 use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 use std::sync::Arc;
 
-pub struct ChunkedRealFft {
-    chunk_size: usize,
+pub struct WindowedRealFft {
+    fft_size: usize,
     planner: RealFftPlanner<f64>,
     forward: Arc<dyn RealToComplex<f64>>,
     inverse: Arc<dyn ComplexToReal<f64>>,
+    window_function: Box<dyn WindowFunction>,
+    original_length: usize,
 }
 
-impl ChunkedRealFft {
-    pub fn new(chunk_size: usize) -> Self {
+impl WindowedRealFft {
+    pub fn new(fft_size: usize) -> Self {
         let mut planner = RealFftPlanner::new();
-        let forward = planner.plan_fft_forward(chunk_size);
-        let inverse = planner.plan_fft_inverse(chunk_size);
+        let forward = planner.plan_fft_forward(fft_size);
+        let inverse = planner.plan_fft_inverse(fft_size);
+
+        let window_function = Box::new(HannWindow::new(fft_size));
 
         Self {
-            chunk_size,
+            fft_size,
             planner,
             forward,
             inverse,
+            window_function,
+            original_length: 0,
         }
     }
 
-    pub fn chunk_size(mut self, value: usize) -> Self {
-        self.chunk_size = value;
+    pub fn fft_size(mut self, value: usize) -> Self {
+        self.fft_size = value;
 
         let forward = self.planner.plan_fft_forward(value);
         let inverse = self.planner.plan_fft_inverse(value);
@@ -39,32 +45,36 @@ impl ChunkedRealFft {
         self
     }
 
-    #[inline(always)]
-    fn forward_real_fft(&mut self, real_signal: impl Into<Vec<f64>>) -> Vec<Complex<f64>> {
-        let mut real_signal = real_signal.into();
-
-        let mut output = self.forward.make_output_vec();
-
-        self.forward.process(&mut real_signal, &mut output).unwrap();
-
-        output
+    pub fn original_length(&mut self, value: usize) {
+        self.original_length = value;
     }
 
     pub fn forward(&mut self, data: impl Into<Vec<f64>>) -> Vec<Vec<Complex<f64>>> {
         let mut data = data.into();
 
-        let Some(new_length) = data.len().checked_next_multiple_of(self.chunk_size) else {
+        let Some(new_length) = data.len().checked_next_multiple_of(self.fft_size) else {
             return vec![];
         };
 
+        self.original_length = data.len();
+
         data.resize(new_length, 0.0);
 
-        data.chunks_exact(self.chunk_size)
-            .map(|chunk| self.forward_real_fft(chunk))
+        self.window_function
+            .apply(data)
+			.into_iter()
+            .map(|mut chunk| {
+                let mut output = self.forward.make_output_vec();
+
+                self.forward
+                    .process(&mut chunk, &mut output)
+                    .unwrap();
+
+                output
+            })
             .collect::<Vec<Vec<Complex<f64>>>>()
     }
 
-    #[inline(always)]
     fn inverse_real_fft(&mut self, mut fft_real_signal: Vec<Complex<f64>>) -> Vec<f64> {
         let mut real_output = self.inverse.make_output_vec();
 
@@ -72,7 +82,7 @@ impl ChunkedRealFft {
             .process(&mut fft_real_signal, &mut real_output)
             .unwrap();
 
-        let chunk_size_f64 = self.chunk_size as f64;
+        let chunk_size_f64 = self.fft_size as f64;
 
         real_output
             .into_iter()
@@ -81,8 +91,15 @@ impl ChunkedRealFft {
     }
 
     pub fn inverse(&mut self, data: Vec<Vec<Complex<f64>>>) -> Vec<f64> {
-        data.into_iter()
-            .flat_map(|chunk| self.inverse_real_fft(chunk))
+        let data = data
+            .into_iter()
+            .map(|chunk| self.inverse_real_fft(chunk))
+            .collect::<Vec<Vec<f64>>>();
+
+        self.window_function
+            .reverse(data)
+			.into_iter()
+            .take(self.original_length)
             .collect::<Vec<f64>>()
     }
 

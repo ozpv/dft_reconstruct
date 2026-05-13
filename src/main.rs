@@ -2,7 +2,7 @@
 #![allow(clippy::inline_always)]
 
 use clap::Parser;
-use dft_reconstruct::windowed_fft::ChunkedRealFft;
+use dft_reconstruct::windowed_fft::WindowedRealFft;
 use hashbrown::HashSet;
 use itertools::Itertools;
 use num_complex::Complex;
@@ -114,9 +114,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         right,
     } = read_32_bit_stereo_pcm_wav("signal.wav")?;
 
-    let mut fft = ChunkedRealFft::new(32768);
+    let mut fft = WindowedRealFft::new(4096_usize.next_power_of_two());
 
-    let mut left = fft.forward(ChunkedRealFft::i32_to_f64(left));
+    let mut left = fft.forward(WindowedRealFft::i32_to_f64(left));
 
     for chunk in &mut left {
         retain_top_n_magnitudes(chunk, args.order);
@@ -124,7 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let left = fft.inverse(left);
 
-    let mut right = fft.forward(ChunkedRealFft::i32_to_f64(right));
+    let mut right = fft.forward(WindowedRealFft::i32_to_f64(right));
 
     for chunk in &mut right {
         retain_top_n_magnitudes(chunk, args.order);
@@ -136,8 +136,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "output_signal.wav",
         header,
         data_offset,
-        ChunkedRealFft::f64_to_i32(left),
-        ChunkedRealFft::f64_to_i32(right),
+        WindowedRealFft::f64_to_i32(left),
+        WindowedRealFft::f64_to_i32(right),
     )?;
 
     println!("Finished in {:?}", now.elapsed());
