@@ -1,5 +1,5 @@
-#![feature(iter_array_chunks)]
 #![allow(clippy::inline_always)]
+#![feature(iter_array_chunks)]
 
 use clap::Parser;
 use dft_reconstruct::windowed_fft::WindowedRealFft;
@@ -114,7 +114,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         right,
     } = read_32_bit_stereo_pcm_wav("signal.wav")?;
 
-    let mut fft = WindowedRealFft::new(4096_usize.next_power_of_two());
+    let fft_size = ((60.0 / 138.0) * 44_100.0) as usize;
+
+    let mut fft = WindowedRealFft::new(fft_size);
 
     let mut left = fft.forward(WindowedRealFft::i32_to_f64(left));
 

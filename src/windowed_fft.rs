@@ -1,8 +1,11 @@
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::return_self_not_must_use)]
 
-use crate::window::{HannWindow, HammingWindow, BlackmanHarris, RectangularWindow, WindowFunction};
+use crate::window::{
+    BlackmanHarrisWindow, HammingWindow, HannWindow, RectangularWindow, WindowFunction,
+};
 use num_complex::Complex;
+use rayon::prelude::*;
 use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 use std::sync::Arc;
 
@@ -21,7 +24,7 @@ impl WindowedRealFft {
         let forward = planner.plan_fft_forward(fft_size);
         let inverse = planner.plan_fft_inverse(fft_size);
 
-        let window_function = Box::new(HannWindow::new(fft_size));
+        let window_function = Box::new(RectangularWindow::new(fft_size));
 
         Self {
             fft_size,
@@ -62,45 +65,39 @@ impl WindowedRealFft {
 
         self.window_function
             .apply(data)
-			.into_iter()
+            .into_par_iter()
             .map(|mut chunk| {
                 let mut output = self.forward.make_output_vec();
 
-                self.forward
-                    .process(&mut chunk, &mut output)
-                    .unwrap();
+                self.forward.process(&mut chunk, &mut output).unwrap();
 
                 output
             })
             .collect::<Vec<Vec<Complex<f64>>>>()
     }
 
-    fn inverse_real_fft(&mut self, mut fft_real_signal: Vec<Complex<f64>>) -> Vec<f64> {
-        let mut real_output = self.inverse.make_output_vec();
-
-        self.inverse
-            .process(&mut fft_real_signal, &mut real_output)
-            .unwrap();
-
-        let chunk_size_f64 = self.fft_size as f64;
-
-        real_output
-            .into_iter()
-            .map(|sample| sample / chunk_size_f64)
-            .collect::<Vec<f64>>()
-    }
-
     pub fn inverse(&mut self, data: Vec<Vec<Complex<f64>>>) -> Vec<f64> {
         let data = data
-            .into_iter()
-            .map(|chunk| self.inverse_real_fft(chunk))
+            .into_par_iter()
+            .map(|mut chunk| {
+                let mut real_output = self.inverse.make_output_vec();
+
+                self.inverse.process(&mut chunk, &mut real_output).unwrap();
+
+                let chunk_size_f64 = self.fft_size as f64;
+
+                real_output
+                    .into_iter()
+                    .map(|sample| sample / chunk_size_f64)
+                    .collect::<Vec<f64>>()
+            })
             .collect::<Vec<Vec<f64>>>();
 
-        self.window_function
-            .reverse(data)
-			.into_iter()
-            .take(self.original_length)
-            .collect::<Vec<f64>>()
+        let mut output = self.window_function.reverse(data);
+
+        output.truncate(self.original_length);
+
+        output
     }
 
     pub fn i32_to_f64(item: Vec<i32>) -> Vec<f64> {
